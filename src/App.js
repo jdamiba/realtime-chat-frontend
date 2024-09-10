@@ -1,8 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import io from "socket.io-client";
 import "./App.css";
-
-const socket = io("http://localhost:3001");
 
 const getAvatarUrl = (name) =>
   `https://ui-avatars.com/api/?name=${encodeURIComponent(
@@ -16,24 +13,38 @@ function App() {
   const [isUsernameSet, setIsUsernameSet] = useState(false);
   const [users, setUsers] = useState([]);
   const messageListRef = useRef(null);
+  const socketRef = useRef(null);
 
   useEffect(() => {
-    socket.on("chat message", (msg) => {
-      setMessages((prevMessages) => [...prevMessages, msg]);
-    });
+    socketRef.current = new WebSocket("ws://localhost:3001");
 
-    socket.on("user list", (userList) => {
-      setUsers(userList);
-    });
+    socketRef.current.onopen = () => {
+      console.log("Connected to server");
+    };
 
-    socket.on("chat history", (history) => {
-      setMessages(history);
-    });
+    socketRef.current.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      switch (data.type) {
+        case "chat_message":
+          setMessages((prevMessages) => [...prevMessages, data.message]);
+          break;
+        case "user_list":
+          setUsers(data.users);
+          break;
+        case "chat_history":
+          setMessages(data.messages);
+          break;
+        default:
+          console.log("Unknown message type:", data.type);
+      }
+    };
+
+    socketRef.current.onclose = () => {
+      console.log("Disconnected from server");
+    };
 
     return () => {
-      socket.off("chat message");
-      socket.off("user list");
-      socket.off("chat history");
+      socketRef.current.close();
     };
   }, []);
 
@@ -46,7 +57,9 @@ function App() {
   const setUsernameFn = (e) => {
     e.preventDefault();
     if (username) {
-      socket.emit("set username", username);
+      socketRef.current.send(
+        JSON.stringify({ type: "set_username", username })
+      );
       setIsUsernameSet(true);
     }
   };
@@ -54,7 +67,9 @@ function App() {
   const sendMessage = (e) => {
     e.preventDefault();
     if (input && isUsernameSet) {
-      socket.emit("chat message", input);
+      socketRef.current.send(
+        JSON.stringify({ type: "chat_message", text: input })
+      );
       setInput("");
     }
   };
