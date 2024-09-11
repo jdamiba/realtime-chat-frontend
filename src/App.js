@@ -16,59 +16,82 @@ function App() {
   const [privateTabs, setPrivateTabs] = useState({});
   const messageListRef = useRef(null);
   const socketRef = useRef(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const usernameRef = useRef("");
 
   useEffect(() => {
-    socketRef.current = new WebSocket("ws://localhost:3001");
+    socketRef.current = new WebSocket(
+      "wss://realtime-chat-backend-09v8.onrender.com"
+    );
 
     socketRef.current.onopen = () => {
-      console.log("Connected to server");
-    };
-
-    socketRef.current.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      switch (data.type) {
-        case "chat_message":
-          setMessages((prevMessages) => [...prevMessages, data.message]);
-          break;
-        case "user_list":
-          setUsers(data.users);
-          break;
-        case "chat_history":
-          setMessages(data.messages);
-          break;
-        case "private_message":
-          setPrivateTabs((prevTabs) => {
-            const otherUser =
-              data.message.sender === username
-                ? data.message.recipient
-                : data.message.sender;
-            const updatedMessages = prevTabs[otherUser]?.messages || [];
-            return {
-              ...prevTabs,
-              [otherUser]: {
-                ...prevTabs[otherUser],
-                messages: [...updatedMessages, data.message],
-              },
-            };
-          });
-          break;
-        case "private_history":
-          setPrivateTabs((prevTabs) => ({
-            ...prevTabs,
-            [data.otherUser]: {
-              ...prevTabs[data.otherUser],
-              messages: data.history,
-            },
-          }));
-          break;
-        default:
-          console.log("Unknown message type:", data.type);
-      }
+      console.log("WebSocket connected");
+      setIsConnected(true);
     };
 
     socketRef.current.onclose = () => {
-      console.log("Disconnected from server");
+      console.log("WebSocket disconnected");
+      setIsConnected(false);
     };
+
+    socketRef.current.onmessage = (event) => {
+      console.log("Received message from server:", event.data);
+      try {
+        const data = JSON.parse(event.data);
+        console.log("Parsed message:", data);
+
+        switch (data.type) {
+          case "chat_message":
+            console.log("Updating messages with:", data.message);
+            setMessages((prevMessages) => [...prevMessages, data.message]);
+            break;
+          case "user_list":
+            console.log("Updating user list:", data.users);
+            setUsers(data.users);
+            break;
+          case "chat_history":
+            console.log("Setting chat history:", data.messages);
+            setMessages(data.messages);
+            break;
+          case "private_message":
+            console.log("Received private message:", data.message);
+            console.log("Current username:", username); // Add this line for debugging
+            setPrivateTabs((prevTabs) => {
+              const otherUser =
+                data.message.sender === username
+                  ? data.message.recipient
+                  : data.message.sender;
+
+              // If this is our own message and we don't have a tab open for the recipient, don't create one
+              if (data.message.sender === username && !prevTabs[otherUser]) {
+                return prevTabs;
+              }
+
+              // Update existing tab or create a new one only if it's a message from another user
+              if (prevTabs[otherUser] || data.message.sender !== username) {
+                return {
+                  ...prevTabs,
+                  [otherUser]: {
+                    messages: [
+                      ...(prevTabs[otherUser]?.messages || []),
+                      data.message,
+                    ],
+                  },
+                };
+              }
+
+              return prevTabs;
+            });
+            break;
+          default:
+            console.log("Unknown message type:", data.type);
+        }
+      } catch (error) {
+        console.error("Error processing message:", error);
+      }
+    };
+
+    // ... rest of the WebSocket event handlers
 
     return () => {
       socketRef.current.close();
@@ -83,29 +106,52 @@ function App() {
 
   const setUsernameFn = (e) => {
     e.preventDefault();
-    if (username) {
+    if (username.trim() && socketRef.current.readyState === WebSocket.OPEN) {
+      const trimmedUsername = username.trim();
+      console.log("Sending username:", trimmedUsername);
       socketRef.current.send(
-        JSON.stringify({ type: "set_username", username })
+        JSON.stringify({ type: "set_username", username: trimmedUsername })
       );
+      setUsername(trimmedUsername);
+      usernameRef.current = trimmedUsername;
       setIsUsernameSet(true);
+    } else {
+      console.log("WebSocket not ready or username empty");
     }
   };
 
   const sendMessage = (e) => {
     e.preventDefault();
+    console.log("Sending message, current username:", usernameRef.current);
     if (input && isUsernameSet) {
       if (activeTab === "main") {
         socketRef.current.send(
           JSON.stringify({ type: "chat_message", text: input })
         );
       } else {
-        socketRef.current.send(
-          JSON.stringify({
-            type: "private_message",
-            text: input,
-            recipient: activeTab,
-          })
-        );
+        const privateMessage = {
+          type: "private_message",
+          text: input,
+          recipient: activeTab,
+        };
+        socketRef.current.send(JSON.stringify(privateMessage));
+
+        // Immediately update the UI for the sender
+        setPrivateTabs((prevTabs) => ({
+          ...prevTabs,
+          [activeTab]: {
+            ...prevTabs[activeTab],
+            messages: [
+              ...(prevTabs[activeTab]?.messages || []),
+              {
+                text: input,
+                sender: username,
+                recipient: activeTab,
+                timestamp: new Date().toISOString(),
+              },
+            ],
+          },
+        }));
       }
       setInput("");
     }
@@ -114,15 +160,18 @@ function App() {
   const openPrivateChat = (user) => {
     if (user !== username) {
       setActiveTab(user);
-      if (!privateTabs[user]) {
-        setPrivateTabs((prevTabs) => ({
-          ...prevTabs,
-          [user]: { messages: [] },
-        }));
-        socketRef.current.send(
-          JSON.stringify({ type: "get_private_history", otherUser: user })
-        );
-      }
+      setPrivateTabs((prevTabs) => {
+        if (!prevTabs[user]) {
+          return {
+            ...prevTabs,
+            [user]: { messages: [] },
+          };
+        }
+        return prevTabs;
+      });
+      socketRef.current.send(
+        JSON.stringify({ type: "get_private_history", otherUser: user })
+      );
     }
   };
 
@@ -159,13 +208,13 @@ function App() {
   return (
     <div className="App chat-screen">
       <div className="sidebar">
-        <h3>Online Users</h3>
+        <h3>Online Users ({users.length})</h3>
         <ul className="user-list">
           {users.map((user, index) => (
             <li
               key={index}
               className="user-item"
-              onClick={() => openPrivateChat(user)}
+              onClick={() => user !== username && openPrivateChat(user)}
             >
               <img src={getAvatarUrl(user)} alt={user} className="avatar" />
               <span>{user}</span>
@@ -262,6 +311,9 @@ function App() {
             Send
           </button>
         </form>
+      </div>
+      <div className="connection-status">
+        Connection status: {isConnected ? "Connected" : "Disconnected"}
       </div>
     </div>
   );
