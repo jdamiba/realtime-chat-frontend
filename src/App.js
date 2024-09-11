@@ -55,32 +55,22 @@ function App() {
             break;
           case "private_message":
             console.log("Received private message:", data.message);
-            console.log("Current username:", username); // Add this line for debugging
             setPrivateTabs((prevTabs) => {
               const otherUser =
                 data.message.sender === username
                   ? data.message.recipient
                   : data.message.sender;
 
-              // If this is our own message and we don't have a tab open for the recipient, don't create one
-              if (data.message.sender === username && !prevTabs[otherUser]) {
-                return prevTabs;
-              }
-
-              // Update existing tab or create a new one only if it's a message from another user
-              if (prevTabs[otherUser] || data.message.sender !== username) {
-                return {
-                  ...prevTabs,
-                  [otherUser]: {
-                    messages: [
-                      ...(prevTabs[otherUser]?.messages || []),
-                      data.message,
-                    ],
-                  },
-                };
-              }
-
-              return prevTabs;
+              // Always update the tab, regardless of whether it's our message or not
+              return {
+                ...prevTabs,
+                [otherUser]: {
+                  messages: [
+                    ...(prevTabs[otherUser]?.messages || []),
+                    data.message,
+                  ],
+                },
+              };
             });
             break;
           default:
@@ -122,7 +112,6 @@ function App() {
 
   const sendMessage = (e) => {
     e.preventDefault();
-    console.log("Sending message, current username:", usernameRef.current);
     if (input && isUsernameSet) {
       if (activeTab === "main") {
         socketRef.current.send(
@@ -136,22 +125,7 @@ function App() {
         };
         socketRef.current.send(JSON.stringify(privateMessage));
 
-        // Immediately update the UI for the sender
-        setPrivateTabs((prevTabs) => ({
-          ...prevTabs,
-          [activeTab]: {
-            ...prevTabs[activeTab],
-            messages: [
-              ...(prevTabs[activeTab]?.messages || []),
-              {
-                text: input,
-                sender: username,
-                recipient: activeTab,
-                timestamp: new Date().toISOString(),
-              },
-            ],
-          },
-        }));
+        // Remove the immediate UI update
       }
       setInput("");
     }
